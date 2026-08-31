@@ -81,6 +81,10 @@ def test(args):
             depth = args.baseline / disp_est.clip(min=1e-8)
             np.save(fn, depth)
 
+            # CGFormer only consumes the depth arrays under depth/sequences.
+            # Skip saving the optional disparity visualization images.
+            continue
+
             # depth = 388.1823 / disp_est.clip(min=1e-8) # sequence 0-2; 13-21
             # depth = 381.8293 / disp_est.clip(min=1e-8) # sequence 4-12
             # depth = 389.6304 / disp_est.clip(min=1e-8) # sequence 3
