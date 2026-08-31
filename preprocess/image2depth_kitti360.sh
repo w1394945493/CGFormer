@@ -10,7 +10,7 @@ exeFunc(){
     cd ..
 }
 
-data_path='data/SSCBenchKITTI360'
+data_path='/c20250502/wangyushen/Datasets/kitti/sscbenchkitti360/sscbench-kitti'
 
 for num_seq in '2013_05_28_drive_0000_sync' '2013_05_28_drive_0002_sync' '2013_05_28_drive_0003_sync' \
                 '2013_05_28_drive_0004_sync' '2013_05_28_drive_0005_sync' '2013_05_28_drive_0006_sync' \
