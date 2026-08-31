@@ -78,6 +78,7 @@ dependencies:
     - tifffile==2020.9.3
     - torch==1.6.0
     - torchvision==0.7.0
+    - tqdm==4.64.1
     - typing-extensions==4.0.0
     - urllib3==1.26.7
     - werkzeug==1.0.1

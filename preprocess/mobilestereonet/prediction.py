@@ -11,13 +11,12 @@ For KITTI-360, depth = 0.6 * 552.554261 / disp
 import os
 import argparse
 import torch.nn as nn
-from skimage import io
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from datasets import __datasets__
 from models import __models__
 from utils import *
-from utils.KittiColormap import *
 
 cudnn.benchmark = True
 
@@ -53,11 +52,22 @@ model.load_state_dict(state_dict['model'])
 
 
 def test(args):
-    print("Generating the disparity maps...")
+    output_folder = os.path.join(args.savepath, "sequences", args.num_seq)
+    os.makedirs(output_folder, exist_ok=True)
+    generated = 0
+    skipped = 0
 
-    os.makedirs('./predictions', exist_ok=True)
+    progress = tqdm(TestImgLoader, desc=f"Depth {args.num_seq}", unit="frame")
+    for sample in progress:
+        left_filename = sample["left_filename"][0]
+        frame_id = os.path.splitext(os.path.basename(left_filename))[0]
+        depth_path = os.path.join(output_folder, frame_id + ".npy")
 
-    for batch_idx, sample in enumerate(TestImgLoader):
+        # Avoid loading the model inputs onto the GPU when this frame is done.
+        if os.path.isfile(depth_path):
+            skipped += 1
+            progress.set_postfix(generated=generated, skipped=skipped)
+            continue
 
         disp_est_tn = test_sample(sample)
         disp_est_np = tensor2numpy(disp_est_tn)
@@ -71,41 +81,14 @@ def test(args):
 
             disp_est = np.array(disp_est[top_pad:, :-right_pad], dtype=np.float32) 
 
-            # -------------------------------------------------------------------------------------------------------------
-            # convert to depth value
-            output_folder = os.path.join(args.savepath, "sequences", args.num_seq)
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
-                
-            fn = os.path.join(output_folder, fn.split('/')[-1].split('.')[0])
+            fn = os.path.join(output_folder, os.path.splitext(os.path.basename(fn))[0])
             depth = args.baseline / disp_est.clip(min=1e-8)
             np.save(fn, depth)
+            generated += 1
 
-            # CGFormer only consumes the depth arrays under depth/sequences.
-            # Skip saving the optional disparity visualization images.
-            continue
+        progress.set_postfix(generated=generated, skipped=skipped)
 
-            # depth = 388.1823 / disp_est.clip(min=1e-8) # sequence 0-2; 13-21
-            # depth = 381.8293 / disp_est.clip(min=1e-8) # sequence 4-12
-            # depth = 389.6304 / disp_est.clip(min=1e-8) # sequence 3
-            # depth = 331.532557 / disp_est.clip(min=1e-8) # kitti-360
-        
-            # -------------------------------------------------------------------------------------------------------------
-            # save the disparity image
-            output_folder = os.path.join(args.savepath, "disparity", args.num_seq)
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
-            fn = os.path.join(output_folder, fn.split('/')[-1].split('.')[0] + '.jpg')
-
-            print("saving to", fn, disp_est.shape)
-            if float(args.colored) == 1:
-                disp_est = kitti_colormap(disp_est)
-                cv2.imwrite(fn, disp_est)
-            else:
-                disp_est = np.round(disp_est * 256).astype(np.uint16)
-                io.imsave(fn, disp_est)
-            # -------------------------------------------------------------------------------------------------------------
-    print("Done!")
+    print(f"Sequence {args.num_seq} done: generated={generated}, skipped={skipped}")
 
 
 @make_nograd_func
