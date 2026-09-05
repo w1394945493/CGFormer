@@ -21,6 +21,11 @@ from mmcv.cnn.bricks.transformer import build_positional_encoding
 
 @HEADS.register_module()
 class VoxFormerHead(nn.Module):
+    """CGVT 的稀疏到稠密体素特征生成头。
+
+    可见体素先经 geometry-aware cross-attention 从图像取特征，再由
+    deformable self-attention 将信息传播到未观测体素。
+    """
     def __init__(
         self,
         *args,
@@ -105,6 +110,8 @@ class VoxFormerHead(nn.Module):
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype, device = mlvl_feats[0].dtype, mlvl_feats[0].device        
 
+        # 可学习 embedding 提供与位置相关的基础 query；CAQG 产生的
+        # lss_volume 再注入当前图像上下文，使 query 对输入场景自适应。
         volume_queries = self.volume_embed.weight.to(dtype)
         if lss_volume is not None:
             # Todo: support batch size > 1
@@ -124,7 +131,8 @@ class VoxFormerHead(nn.Module):
         # proposal[unq[:, 0], unq[:, 1], unq[:, 2], unq[:, 3]] = 1
         unmasked_idx = torch.nonzero(proposal.reshape(-1) > 0).view(-1)
         masked_idx = torch.nonzero(proposal.reshape(-1) == 0).view(-1)
-        # Compute seed features of query proposals by deformable cross attention
+        # 对 proposal 指定的可见体素执行 3D deformable cross-attention，
+        # 得到可靠的 seed features，避免在全部体素上进行昂贵图像查询。
         seed_feats = self.cross_transformer.get_vox_features(
             mlvl_feats,
             volume_queries,
@@ -147,8 +155,11 @@ class VoxFormerHead(nn.Module):
         if self.mlp_prior is None:
             vox_feats_flatten[vox_coords[masked_idx, 3], :] = self.mask_embed.weight.view(1, self.embed_dims).expand(masked_idx.shape[0], self.embed_dims).to(dtype)
         else:
+            # 不可见体素不能直接从图像取到可靠特征，使用 CAQG 的粗体素
+            # 先验经 MLP 初始化，再交给 self-attention 做全场景传播。
             vox_feats_flatten[vox_coords[masked_idx, 3], :] = self.mlp_prior(lss_volume_flatten[masked_idx, :])
         
+        # 从可见 seed 向遮挡/不可见区域扩散上下文，完成 sparse-to-dense。
         vox_feats_diff = self.self_transformer.diffuse_vox_features(
             mlvl_feats,
             vox_feats_flatten,

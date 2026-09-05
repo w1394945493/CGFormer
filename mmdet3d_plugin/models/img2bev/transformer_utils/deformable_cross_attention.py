@@ -492,8 +492,13 @@ class MSDeformableAttention3D_DFA3D(MSDeformableAttention3D):
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
         value = value.view(bs, num_value, self.num_heads, -1)
+        # 论文的 Geometry-Aware 设计：除图像平面 (u,v) 外，把预测深度
+        # 分布视为第三个采样维度。这样同一条相机射线上的不同体素不会
+        # 因二维投影重合而无差别地读取同一份图像特征。
         _, _, dim_depth = value_dpt_dist.shape
         value_dpt_dist = value_dpt_dist.view(bs, num_value, 1, dim_depth).repeat(1,1,self.num_heads, 1)
+        # 每个 query 同时预测二维像素偏移和一维深度偏移，组合为
+        # (delta_u, delta_v, delta_d) 的 3D deformable sampling offset。
         sampling_offsets_uv = self.sampling_offsets(query).view(
             bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         sampling_offsets_depth = self.sampling_offsets_depth(query).view(
@@ -558,6 +563,8 @@ class MSDeformableAttention3D_DFA3D(MSDeformableAttention3D):
                 MultiScaleDeformableAttnFunction = MultiScale3DDeformableAttnFunction_fp16
             else:
                 MultiScaleDeformableAttnFunction = MultiScale3DDeformableAttnFunction_fp32
+            # CUDA 算子联合采样图像 value 与对应位置的深度概率；
+            # depth_score 会抑制与当前体素几何位置不一致的图像响应。
             output, depth_score = MultiScaleDeformableAttnFunction.apply(
                 value, value_dpt_dist, spatial_shapes_3D, level_start_index, sampling_locations,
                 attention_weights, self.im2col_step)
@@ -574,7 +581,8 @@ class MSDeformableAttention3D_DFA3D(MSDeformableAttention3D):
             raise NotImplementedError
         '''
         
-        # weight_update is useful when self.use_empty == True.
+        # 将深度一致性与注意力权重结合，衡量该 query 从图像中取得的
+        # 有效信息量；无可靠观测时可更多保留 empty query 先验。
         weight_update = (depth_score.mean(dim=-1) * attention_weights).flatten(-2).sum(dim=-1, keepdim=True)
         if not self.batch_first:
             output = output.permute(1, 0, 2)
@@ -587,7 +595,11 @@ class MSDeformableAttention3D_DFA3D(MSDeformableAttention3D):
 
 @ATTENTION.register_module()
 class DeformCrossAttention_DFA3D(DeformCrossAttention):
-    """An attention module used in BEVFormer.
+    """CGFormer 中封装多相机交互的几何感知 3D Cross-Attention。
+
+    它只重排并处理各相机真正可见的体素 query，再调用上面的 3D
+    deformable attention，以降低显存并缓解二维投影造成的深度歧义。
+
     Args:
         embed_dims (int): The embedding dimension of Attention.
             Default: 256.
@@ -677,7 +689,8 @@ class DeformCrossAttention_DFA3D(DeformCrossAttention):
             index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
             indexes.append(index_query_per_img)
         max_len = max([len(each) for each in indexes])
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
+        # 每个相机只与投影有效的体素 query 交互，既避免无意义聚合，
+        # 也显著减少稀疏到稠密 lifting 阶段的显存开销。
         queries_rebatch = query.new_zeros(
             [bs, self.num_cams, max_len, self.embed_dims])
         reference_points_rebatch = reference_points_cam.new_zeros(

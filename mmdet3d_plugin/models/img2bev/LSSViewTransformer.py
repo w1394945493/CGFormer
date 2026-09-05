@@ -14,6 +14,11 @@ def gen_dx_bx(xbound, ybound, zbound):
 
 @NECKS.register_module()
 class LSSViewTransformer(BaseModule):
+    """将图像上下文按深度概率提升到 3D，生成场景相关的粗体素 query。
+
+    这是论文 Context-Aware Query Generator 的核心 lifting/splatting
+    部分：不同输入图像会产生不同的体素先验，而非共享同一组固定 query。
+    """
     def __init__(
         self, grid_config=None, data_config=None, downsample=8,
     ):
@@ -114,12 +119,15 @@ class LSSViewTransformer(BaseModule):
             db, cb, dh, dw = depth_prob.shape
             assert db == B * N
             depth_prob = depth_prob.view(B, N, cb, dh, dw)
-        # Lift
+        # Lift：把每个像素的 context feature 与其各深度 bin 的概率相乘，
+        # 沿相机射线展开成带语义权重的视锥体特征 (B,N,D,H,W,C)。
         volume = depth_prob.unsqueeze(2) * feat.unsqueeze(3)
         volume = volume.view(B, N, -1, self.D, H, W)
         volume = volume.permute(0, 1, 3, 4, 5, 2)
 
-        # Splat
+        # Splat：根据相机内外参把视锥体采样点变换到自车坐标系，并将
+        # 落在同一网格内的特征池化，得到用于初始化 Transformer query
+        # 的 context-dependent 3D volume。
         geom = self.get_geometry(rots, trans, intrins, post_rots, post_trans, bda)
         bev_feat = self.voxel_pooling(geom, volume)
 

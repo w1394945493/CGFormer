@@ -26,6 +26,11 @@ class StereoVolumeEncoder(nn.Module):
 
 @NECKS.register_module()
 class GeometryDepth_Net(BaseModule):
+    """预测上下文特征及几何增强的离散深度分布。
+
+    深度不仅用于辅助监督，还同时服务于 CAQG 的 2D-to-3D lifting 和
+    3D deformable cross-attention，是 CGFormer 消除射线深度歧义的基础。
+    """
     def __init__(
         self,
         downsample=8,
@@ -196,11 +201,14 @@ class GeometryDepth_Net(BaseModule):
         B, N, C, H, W = x.shape
         x = x.view(B * N, C, H, W)
 
+        # 单目分支结合相机参数生成 context feature 和单目深度 logits。
         x = self.depth_net(x, mlp_input)
         mono_digit = x[:, :self.D, ...]
         mono_volume = self.get_depth_dist(mono_digit)
         img_feat = x[:,  self.D:self.D + self.numC_Trans, ...]
         
+        # 几何/立体深度线索编码为同一组离散深度 bin，并与单目预测融合。
+        # 这种局部深度细化为后续体素 query 与 3D 注意力提供更可靠几何先验。
         _, stereo_volume = self.get_downsampled_gt_depth(stereo_depth)
         stereo_volume = stereo_volume.view(B, H, W, -1).permute(0, 3, 1, 2)
         stereo_volume = self.stereo_volume_encoder(stereo_volume)
