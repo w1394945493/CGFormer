@@ -62,13 +62,12 @@ if __name__ == '__main__':
     
     if not config.eval:
         trainer = pl.Trainer(
+            accelerator='gpu',
             devices=[i for i in range(num_gpu)],
             strategy=DDPStrategy(
-                accelerator='gpu',
                 find_unused_parameters=False
             ),
             max_steps=config.training_steps,
-            resume_from_checkpoint=None,
             callbacks=[
                 checkpoint_callback,
                 LearningRateMonitor(logging_interval='step')
@@ -82,9 +81,9 @@ if __name__ == '__main__':
         trainer.fit(model=model, datamodule=data_dm)
     else:
         trainer = pl.Trainer(
+            accelerator='gpu',
             devices=[i for i in range(num_gpu)],
             strategy=DDPStrategy(
-                accelerator='gpu',
                 find_unused_parameters=False
             ),
             logger=tb_logger,

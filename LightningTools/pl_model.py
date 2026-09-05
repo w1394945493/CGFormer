@@ -68,7 +68,7 @@ class pl_model(LightningBaseModel):
 
             self.val_metrics.add_batch(pred, gt_occ)
     
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         metric_list = [("train", self.train_metrics), ("val", self.val_metrics)]
         # metric_list = [("val", self.val_metrics)]
         
@@ -110,7 +110,7 @@ class pl_model(LightningBaseModel):
         if gt_occ is not None:
             self.test_metrics.add_batch(pred, gt_occ)
     
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
         metric_list = [("test", self.test_metrics)]
         # metric_list = [("val", self.val_metrics)]
         metrics_list = metric_list
