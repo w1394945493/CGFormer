@@ -64,6 +64,9 @@ class SSCMetrics:
             "iou": iou,
             "iou_ssc": iou_ssc,
             "iou_ssc_mean": np.mean(iou_ssc[1:]),
+            # The number of ground-truth voxels for each class is TP + FN.
+            # JsonLogger uses it to distinguish an absent class from a real 0 IoU.
+            "class_gt": self.tps + self.fns,
         }
         
     def get_score_completion(self, predict, target, nonempty=None):

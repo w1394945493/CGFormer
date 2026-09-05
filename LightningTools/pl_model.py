@@ -32,6 +32,47 @@ class pl_model(LightningBaseModel):
     
     def forward(self, data_dict):
         return self.model(data_dict)
+
+    def _get_global_stats(self, metric):
+        """Aggregate metric counters across ranks before computing ratios."""
+        counts = torch.as_tensor(
+            np.concatenate((
+                np.asarray([
+                    metric.completion_tp,
+                    metric.completion_fp,
+                    metric.completion_fn,
+                ], dtype=np.float64),
+                metric.tps,
+                metric.fps,
+                metric.fns,
+            )),
+            dtype=torch.float64,
+            device=self.device,
+        )
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM)
+
+        num_classes = metric.n_classes
+        completion_tp, completion_fp, completion_fn = counts[:3]
+        tps = counts[3:3 + num_classes]
+        fps = counts[3 + num_classes:3 + 2 * num_classes]
+        fns = counts[3 + 2 * num_classes:]
+
+        precision = completion_tp / (completion_tp + completion_fp).clamp_min(1e-5)
+        recall = completion_tp / (completion_tp + completion_fn).clamp_min(1e-5)
+        iou = completion_tp / (
+            completion_tp + completion_fp + completion_fn
+        ).clamp_min(1e-5)
+        iou_ssc = tps / (tps + fps + fns).clamp_min(1e-5)
+
+        return {
+            'precision': precision.float(),
+            'recall': recall.float(),
+            'iou': iou.float(),
+            'iou_ssc': iou_ssc.float(),
+            'iou_ssc_mean': iou_ssc[1:].mean().float(),
+            'class_gt': tps + fns,
+        }
     
     def training_step(self, batch, batch_idx):
         output_dict = self.forward(batch)
@@ -74,12 +115,24 @@ class pl_model(LightningBaseModel):
         
         metrics_list = metric_list
         for prefix, metric in metrics_list:
-            stats = metric.get_stats()
+            stats = self._get_global_stats(metric)
 
-            self.log("{}/mIoU".format(prefix), torch.tensor(stats["iou_ssc_mean"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/IoU".format(prefix), torch.tensor(stats["iou"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/Precision".format(prefix), torch.tensor(stats["precision"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/Recall".format(prefix), torch.tensor(stats["recall"], dtype=torch.float32), sync_dist=True)
+            if prefix == 'val':
+                for name, iou in zip(self.class_names, stats['iou_ssc']):
+                    self.log(
+                        '{}/class_iou/{}'.format(prefix, name),
+                        iou,
+                        sync_dist=False)
+                for name, count in zip(self.class_names, stats['class_gt']):
+                    self.log(
+                        '{}/class_gt/{}'.format(prefix, name),
+                        count,
+                        sync_dist=False)
+
+            self.log("{}/mIoU".format(prefix), stats["iou_ssc_mean"], sync_dist=False)
+            self.log("{}/IoU".format(prefix), stats["iou"], sync_dist=False)
+            self.log("{}/Precision".format(prefix), stats["precision"], sync_dist=False)
+            self.log("{}/Recall".format(prefix), stats["recall"], sync_dist=False)
             metric.reset()
     
     def test_step(self, batch, batch_idx):
@@ -115,13 +168,23 @@ class pl_model(LightningBaseModel):
         # metric_list = [("val", self.val_metrics)]
         metrics_list = metric_list
         for prefix, metric in metrics_list:
-            stats = metric.get_stats()
+            stats = self._get_global_stats(metric)
 
             for name, iou in zip(self.class_names, stats['iou_ssc']):
-                print(name + ":", iou)
+                if self.global_rank == 0:
+                    print(name + ":", float(iou))
+                self.log(
+                    "{}/class_iou/{}".format(prefix, name),
+                    iou,
+                    sync_dist=False)
+            for name, count in zip(self.class_names, stats['class_gt']):
+                self.log(
+                    "{}/class_gt/{}".format(prefix, name),
+                    count,
+                    sync_dist=False)
 
-            self.log("{}/mIoU".format(prefix), torch.tensor(stats["iou_ssc_mean"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/IoU".format(prefix), torch.tensor(stats["iou"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/Precision".format(prefix), torch.tensor(stats["precision"], dtype=torch.float32), sync_dist=True)
-            self.log("{}/Recall".format(prefix), torch.tensor(stats["recall"], dtype=torch.float32), sync_dist=True)
+            self.log("{}/mIoU".format(prefix), stats["iou_ssc_mean"], sync_dist=False)
+            self.log("{}/IoU".format(prefix), stats["iou"], sync_dist=False)
+            self.log("{}/Precision".format(prefix), stats["precision"], sync_dist=False)
+            self.log("{}/Recall".format(prefix), stats["recall"], sync_dist=False)
             metric.reset()
