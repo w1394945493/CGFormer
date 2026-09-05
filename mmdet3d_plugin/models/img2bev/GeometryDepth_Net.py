@@ -145,7 +145,7 @@ class GeometryDepth_Net(BaseModule):
         
         bda = bda.view(B, 1, *bda.shape[-2:]).repeat(1, N, 1, 1)
         
-        if intrin.shape[-1] == 4:
+        if intrin.shape[-1] == 4: # (1 1 4 4)
             # for KITTI, the intrin matrix is 3x4
             mlp_input = torch.stack([
                 intrin[:, :, 0, 0],
@@ -189,8 +189,8 @@ class GeometryDepth_Net(BaseModule):
                 bda[:, :, 2, 2],
             ], dim=-1)
         
-        sensor2ego = torch.cat([rot, tran.reshape(B, N, 3, 1)], dim=-1).reshape(B, N, -1)
-        mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1)
+        sensor2ego = torch.cat([rot, tran.reshape(B, N, 3, 1)], dim=-1).reshape(B, N, -1) # (1 1 12)
+        mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1) # (1 1 33)
         
         return mlp_input
     

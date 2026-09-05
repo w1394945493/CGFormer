@@ -93,10 +93,10 @@ class CGFormer(BaseModule):
     def extract_img_feat(self, img_inputs, img_metas):
         # 图像编码器提供多尺度视觉语义，GeometryDepthNet 将其拆分为
         # context feature 与离散深度分布；后两者分别承载语义和几何信息。
-        img_enc_feats = self.image_encoder(img_inputs[0])
+        img_enc_feats = self.image_encoder(img_inputs[0]) # (1 1 640 48 160)  # img_inputs[0]:(1 1 3 384 1280)
 
-        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7])
-        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas)
+        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # (1 1 33)
+        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # (1 1 128 48 160) (1 112 48 160) # 上下文特征与离散深度分布
         
         if hasattr(self, 'img_view_transformer'):
             # Context-Aware Query Generator（CAQG）：利用预测深度将当前
