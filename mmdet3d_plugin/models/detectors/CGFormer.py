@@ -158,8 +158,8 @@ class CGFormer(BaseModule):
         pred = torch.argmax(pred, dim=1)
 
         test_output = {
-            'pred': pred,
-            'gt_occ': gt_occ
+            'pred': pred, # (1 256 256 32)
+            'gt_occ': gt_occ # (1 256 256 32)
         }
 
         return test_output
