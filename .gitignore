@@ -9,3 +9,8 @@ __pycache__/
 *.so
 *.egg
 # .vscode/
+
+/packages/DFA3D/build
+/data
+/packages/mmdetection3d/build
+/packages/mmdetection3d/mmdet3d.egg-info

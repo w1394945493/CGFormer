@@ -4,7 +4,7 @@ exeFunc(){
     baseline=$1
     num_seq=$2
     data_path=$3
-    CUDA_VISIBLE_DEVICES=1 python prediction.py --datapath $data_path/data_2d_raw/$num_seq \
+    CUDA_VISIBLE_DEVICES=0 python prediction.py --datapath $data_path/data_2d_raw/$num_seq \
     --testlist ./filenames_kitti360/$num_seq.txt --num_seq $num_seq --loadckpt ./MSNet3D_SF_DS_KITTI2015.ckpt --dataset kitti360 \
     --model MSNet3D --savepath $data_path/depth --baseline $baseline
     cd ..

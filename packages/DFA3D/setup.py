@@ -10,7 +10,7 @@
 # Modified from mmdetection3d (https://github.com/open-mmlab/mmdetection3d)
 # Copyright 2018-2019 Open-MMLab. All rights reserved.
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
-# ------------------------------------------------------------------------ 
+# ------------------------------------------------------------------------
 
 import glob
 import os
@@ -140,7 +140,6 @@ except ImportError:
 
 def get_extensions():
     extensions = []
-    
 
     ext_name = 'dfa3D._ext'
     from torch.utils.cpp_extension import CppExtension, CUDAExtension
@@ -158,10 +157,11 @@ def get_extensions():
     extra_compile_args = {'cxx': []}
 
     if platform.system() != 'Windows':
-        extra_compile_args['cxx'] = ['-std=c++14']
+        # extra_compile_args['cxx'] = ['-std=c++14']
+        extra_compile_args["cxx"] = ["-std=c++17"]
 
     include_dirs = []
-    
+
     project_dir = 'dfa3D/ops/csrc/'
     define_macros += [('WITH_CUDA', None)]
     cuda_args = os.getenv('CUDA_ARGS')
@@ -180,9 +180,10 @@ def get_extensions():
     extension = CUDAExtension
     include_dirs.append(os.path.abspath('./dfa3D/ops/csrc/common'))
     include_dirs.append(os.path.abspath('./dfa3D/ops/csrc/common/cuda'))
-   
+
     if 'nvcc' in extra_compile_args and platform.system() != 'Windows':
-        extra_compile_args['nvcc'] += ['-std=c++14']
+        # extra_compile_args['nvcc'] += ['-std=c++14']
+        extra_compile_args["nvcc"] += ["-std=c++17"]
 
     ext_ops = extension(
         name=ext_name,
@@ -199,8 +200,8 @@ setup(
     description='3D Deformable Attention',
     packages=find_packages(),
     author='Hongyang Li',
-    setup_requires=['pytest-runner'],
-    tests_require=['pytest'],
+    # setup_requires=['pytest-runner'],
+    # tests_require=['pytest'],
     install_requires=install_requires,
     ext_modules=get_extensions(),
     cmdclass=cmd_class,

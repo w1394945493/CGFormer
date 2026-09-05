@@ -1,0 +1,28 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "sem kitti eval",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/main.py",
+            "args": [
+                    "--eval",
+                    "--ckpt_path", "/c20250502/wangyushen/Weights/cgformer/CGFormer-Efficient-Swin-SemanticKITTI.ckpt",
+                    "--config_path", "/vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/configs/customs/CGFormer-Efficient-Swin-SemanticKITTI.py",
+                    "--log_folder", "/vepfs-mlp2/c20250502/haoce/wangyushen/Outputs/gcformer/CGFormer-Efficient-Swin-SemanticKITTI-eval",
+                    "--seed", "7240",
+                    "--log_every_n_steps", "50",               
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/packages/DFA3D"
+            },
+            "console": "integratedTerminal"
+        }
+    ]
+}

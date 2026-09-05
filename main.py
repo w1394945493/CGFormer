@@ -8,7 +8,8 @@ from argparse import ArgumentParser
 from LightningTools.pl_model import pl_model
 from LightningTools.dataset_dm import DataModule
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.profiler import SimpleProfiler
+# from pytorch_lightning.profiler import SimpleProfiler # 旧版写法
+from pytorch_lightning.profilers import SimpleProfiler
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
@@ -90,6 +91,3 @@ if __name__ == '__main__':
             profiler=profiler
         )
         trainer.test(model=model, datamodule=data_dm, ckpt_path=config['ckpt_path'])
-
-    
-
