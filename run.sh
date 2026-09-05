@@ -50,9 +50,23 @@ python -m pip install "mmengine==0.10.7" \
 # evaluate 
 CUDA_VISIBLE_DEVICES=0 \
 python /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/main.py \
---eval \
---ckpt_path /c20250502/wangyushen/Weights/cgformer/CGFormer-Efficient-Swin-SemanticKITTI.ckpt \
---config_path /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/configs/customs/CGFormer-Efficient-Swin-SemanticKITTI.py \
---log_folder CGFormer-Efficient-Swin-SemanticKITTI-eval \
---seed 7240 \
---log_every_n_steps 50
+  --eval \
+  --ckpt_path /c20250502/wangyushen/Weights/cgformer/CGFormer-Efficient-Swin-SemanticKITTI.ckpt \
+  --config_path /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/configs/customs/CGFormer-Efficient-Swin-SemanticKITTI.py \
+  --log_folder /vepfs-mlp2/c20250502/haoce/wangyushen/Outputs/gcformer/CGFormer-Efficient-Swin-SemanticKITTI-eval \
+  --seed 7240 \
+  --log_every_n_steps 50
+
+# train
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+PYTHONPATH="$(pwd):$(pwd)/packages/DFA3D" \
+python /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/main.py \
+  --config_path /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer/configs/customs/CGFormer-Efficient-Swin-SemanticKITTI.py \
+  --log_folder /c20250502/wangyushen/Outputs/cgformer/cgformer/sem_kitti/train \
+  --seed 7240 \
+  --log_every_n_steps 50
+
+cd /vepfs-mlp2/c20250502/haoce/wangyushen/CGFormer
+. /root/miniconda3/bin/activate
+conda activate /vepfs-mlp2/c20250502/haoce/conda_env/wys_temp_2
+bash sh/train_cgformer_semkitti.sh
