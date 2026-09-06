@@ -39,8 +39,8 @@ class SELayer(nn.Module):
     def forward(self, x, x_se):
         x_se = self.conv_reduce(x_se)
         x_se = self.act1(x_se)
-        x_se = self.conv_expand(x_se)
-        return x * self.gate(x_se)
+        x_se = self.conv_expand(x_se) # (1 640 1 1)
+        return x * self.gate(x_se) # (1 640 48 160)*(1 640 1 1)
 
 class _ASPPModule(nn.Module):
     def __init__(self, inplanes, planes, kernel_size, padding, dilation,

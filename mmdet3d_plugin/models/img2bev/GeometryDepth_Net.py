@@ -232,41 +232,41 @@ class GeometryDepth_Net(BaseModule):
         """融合单目预测与几何深度先验，输出上下文特征和深度分布。"""
         # x 是图像编码器输出；其余参数描述相机内外参和图像/BEV增强。
         # mlp_input 已由 get_mlp_input() 整理为每个相机的条件向量。
-        x, rots, trans, intrins, post_rots, post_trans, bda, mlp_input = input
+        x, rots, trans, intrins, post_rots, post_trans, bda, mlp_input = input # (1 1 640 48 160) (1 1 33)
         # 读取外部几何/立体深度图，作为比纯单目预测更可靠的几何先验。
-        stereo_depth = img_metas['stereo_depth']  # (B, N, H_img, W_img)
+        stereo_depth = img_metas['stereo_depth']  # (B, N, H_img, W_img) # (1 1 384 1280)
 
         # x: (批大小, 相机数, 特征通道, 特征图高, 特征图宽)。
         B, N, C, H, W = x.shape
         # DepthNet 是普通 2D 网络，因此把 B、N 合并后逐张图像处理。
-        x = x.view(B * N, C, H, W)  # 合并批次和相机维
+        x = x.view(B * N, C, H, W)  # (1 640 48 160) # 合并批次和相机维
 
         # 单目分支：DepthNet 使用 mlp_input 通过 MLP/SE 调制图像特征，
         # 使输出能够感知焦距、相机位姿和数据增强带来的几何变化。
-        x = self.depth_net(x, mlp_input)  # (B*N, D+numC_Trans, H, W)
+        x = self.depth_net(x, mlp_input)  # (B*N, D+numC_Trans, H, W) (1 240 48 160)
         # 前 D 个通道表示每个像素属于各离散深度区间的未归一化分数。
-        mono_digit = x[:, :self.D, ...]  # (B*N, D, H, W)
+        mono_digit = x[:, :self.D, ...]  # (1 112 48 160) # (B*N, D, H, W)
         # 沿 D 个深度 bin 做 softmax，得到每个像素的单目深度概率分布。
-        mono_volume = self.get_depth_dist(mono_digit)  # (B*N, D, H, W)
+        mono_volume = self.get_depth_dist(mono_digit)  # (1 112 48 160) # (B*N, D, H, W)
         # 后 numC_Trans 个通道保留图像语义，后续用于 CAQG 和 CGVT。
         img_feat = x[:, self.D:self.D + self.numC_Trans, ...]  # (B*N, C_ctx, H, W)
 
         # 几何分支：将连续深度图降采样到特征图尺度，并量化到与单目
         # 分支相同的 D 个深度 bin，方便两种深度信息逐位置融合。
-        _, stereo_volume = self.get_downsampled_gt_depth(stereo_depth)  # one-hot 深度
+        _, stereo_volume = self.get_downsampled_gt_depth(stereo_depth)  # (1 1 384 1280) -> (7680 112) # one-hot 深度
         # 上一步返回展平的 (B*N*H*W,D)，这里恢复为 CNN 所需的
         # (B,D,H,W)。当前写法将 N 并入通道，因此标准配置要求 N=1。
-        stereo_volume = stereo_volume.view(B, H, W, -1).permute(0, 3, 1, 2)
+        stereo_volume = stereo_volume.view(B, H, W, -1).permute(0, 3, 1, 2) # (1 112 48 160)
         # 通过卷积和 U-Net 聚合邻域信息，补充并平滑稀疏的几何深度线索。
-        stereo_volume = self.stereo_volume_encoder(stereo_volume)  # (B, D, H, W)
-        stereo_volume = self.get_depth_dist(stereo_volume)  # 几何深度概率分布
+        stereo_volume = self.stereo_volume_encoder(stereo_volume)  # (1 112 48 160) # (B, D, H, W)
+        stereo_volume = self.get_depth_dist(stereo_volume)  # (1 112 48 160) # 几何深度概率分布
 
         # 融合分支：先进行“单目关注几何、几何关注单目”的双向邻域注意力，
         # 再由 3D U-Net 同时建模深度轴和图像空间，输出融合深度 logits。
-        depth_volume = self.depth_aggregation(stereo_volume, mono_volume)
-        # 最后沿深度维归一化。该分布既用于把 img_feat 提升到 3D，
+        depth_volume = self.depth_aggregation(stereo_volume, mono_volume) # (1 112 48 160)
+        # 最后沿深度维softmax归一化。该分布既用于把 img_feat 提升到 3D，
         # 也用于约束 3D deformable cross-attention 的深度采样。
-        depth_volume = self.get_depth_dist(depth_volume)  # (B, D, H, W)
+        depth_volume = self.get_depth_dist(depth_volume)  # (1 112 48 160) # (B, D, H, W) softmax归一化
 
         # 恢复 context feature 的相机维；深度输出按当前单相机实现保持 4 维。
-        return img_feat.view(B, N, -1, H, W), depth_volume
+        return img_feat.view(B, N, -1, H, W), depth_volume # (11 128 48 160) (1 112 48 160)

@@ -112,25 +112,25 @@ class LSSViewTransformer(BaseModule):
 
 
     def forward(self, feat, depth_prob, cam_params):
-        B, N, C, H, W = feat.shape
+        B, N, C, H, W = feat.shape # (1 1 128 48 160)
         rots, trans, intrins, post_rots, post_trans, bda = cam_params
 
         if len(depth_prob.shape) == 4:
-            db, cb, dh, dw = depth_prob.shape
+            db, cb, dh, dw = depth_prob.shape # (1 112 48 160)
             assert db == B * N
-            depth_prob = depth_prob.view(B, N, cb, dh, dw)
+            depth_prob = depth_prob.view(B, N, cb, dh, dw) # (1 1 112 48 160)
         # *============================================*
         # * Lift & Splat：把每个像素的 context feature 按深度概率提升到 3D，生成场景相关的粗体素 query。
         # Lift：把每个像素的 context feature 与其各深度 bin 的概率相乘，
         # 沿相机射线展开成带语义权重的视锥体特征 (B,N,D,H,W,C)。
-        volume = depth_prob.unsqueeze(2) * feat.unsqueeze(3)
-        volume = volume.view(B, N, -1, self.D, H, W)
-        volume = volume.permute(0, 1, 3, 4, 5, 2)
+        volume = depth_prob.unsqueeze(2) * feat.unsqueeze(3) # (1 1 128 112 48 160)
+        volume = volume.view(B, N, -1, self.D, H, W) # (1 1 128 112 48 160)    
+        volume = volume.permute(0, 1, 3, 4, 5, 2) # (1 1 112 48 160 128)
 
         # Splat：根据相机内外参把视锥体采样点变换到自车坐标系，并将
         # 落在同一网格内的特征池化，得到用于初始化 Transformer query
         # 的 context-dependent 3D volume。
-        geom = self.get_geometry(rots, trans, intrins, post_rots, post_trans, bda)
-        bev_feat = self.voxel_pooling(geom, volume)
+        geom = self.get_geometry(rots, trans, intrins, post_rots, post_trans, bda) # (1 1 112 48 160 3)
+        bev_feat = self.voxel_pooling(geom, volume) # (1 128 128 128 16)
 
         return bev_feat
