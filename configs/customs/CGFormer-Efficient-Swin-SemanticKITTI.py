@@ -133,30 +133,34 @@ _num_points_self_ = 8
 
 model = dict(
     type="CGFormer",
+    # EfficientNet-B7图像主干：从第2～6阶段输出5个不同分辨率的特征图，
+    # 此处仍是多尺度tuple，通道数依次对应下面SECONDFPN的in_channels。
     img_backbone=dict(
         type="CustomEfficientNet",
         arch="b7",
-        drop_path_rate=0.2,
-        frozen_stages=0,
-        norm_eval=False,
-        out_indices=(2, 3, 4, 5, 6),
-        with_cp=True,
+        drop_path_rate=0.2,  # 随机深度比例，用于正则化EfficientNet训练
+        frozen_stages=0,  # 不额外冻结主干阶段
+        norm_eval=False,  # 训练时归一化层保持训练模式
+        out_indices=(2, 3, 4, 5, 6),  # 返回5个阶段的多尺度特征
+        with_cp=True,  # 使用梯度检查点降低训练显存占用
         init_cfg=dict(
-            type="Pretrained",
-            prefix="backbone",
+            type="Pretrained",  # 使用ImageNet预训练权重初始化图像主干
+            prefix="backbone",  # 从checkpoint的backbone字段读取对应参数
             checkpoint="/c20250502/wangyushen/Weights/cgformer/efficientnet-b7_3rdparty_8xb32-aa_in1k_20220119-bf03951c.pth",
         ),
     ),
+    # 将主干的5个尺度统一到输入图像1/8分辨率，并沿通道维拼接；
+    # 每路输出128通道，最终得到单尺度640通道特征，而不是5层特征列表。
     img_neck=dict(
         type="SECONDFPN",
-        in_channels=[48, 80, 224, 640, 2560],
-        upsample_strides=[0.5, 1, 2, 4, 4],
-        out_channels=[128, 128, 128, 128, 128],
+        in_channels=[48, 80, 224, 640, 2560],  # EfficientNet五个输出阶段的通道数
+        upsample_strides=[0.5, 1, 2, 4, 4],  # 各尺度下采样/上采样到相同的H/8×W/8
+        out_channels=[128, 128, 128, 128, 128],  # 每路统一为128通道，拼接后为640通道
     ),
     depth_net=dict(
         type="GeometryDepth_Net",
-        downsample=8,
-        numC_input=640,
+        downsample=8,  # 输入特征空间分辨率为原图的1/8
+        numC_input=640,  # 接收SECONDFPN融合后的单尺度640通道特征
         numC_Trans=numC_Trans,
         cam_channels=33,
         grid_config=grid_config,

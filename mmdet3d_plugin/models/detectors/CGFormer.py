@@ -75,7 +75,7 @@ class CGFormer(BaseModule):
 
     def image_encoder(self, img):
         imgs = img
-        B, N, C, imH, imW = imgs.shape   
+        B, N, C, imH, imW = imgs.shape
         imgs = imgs.view(B * N, C, imH, imW)
 
         x = self.img_backbone(imgs)
@@ -84,21 +84,25 @@ class CGFormer(BaseModule):
             x = self.img_neck(x)
             if type(x) in [list, tuple]:
                 x = x[0]
-        
+
         _, output_dim, ouput_H, output_W = x.shape
         x = x.view(B, N, output_dim, ouput_H, output_W)
-        
+
         return x
-    
+
     def extract_img_feat(self, img_inputs, img_metas):
-        # 图像编码器提供多尺度视觉语义，GeometryDepthNet 将其拆分为
-        # context feature 与离散深度分布；后两者分别承载语义和几何信息。
+        # image_encoder先由EfficientNet提取多尺度特征，再由SECONDFPN将各尺度
+        # 对齐到输入图像的1/8分辨率并沿通道拼接；这里得到的是融合后的单尺度图像特征
         # ================================================#
-        img_enc_feats = self.image_encoder(img_inputs[0]) # (1 1 640 48 160)  # img_inputs[0]:(1 1 3 384 1280)
+        img_enc_feats = self.image_encoder(img_inputs[0]) # 输入图像(1,1,3,384,1280) -> 融合特征(1,1,640,48,160)
         # ================================================#
-        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # (1 1 33)
-        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # (1 1 128 48 160) (1 112 48 160) # 上下文特征与离散深度分布
-        
+        # 将每个相机的内参、camera-to-ego外参及图像/BEV增强参数整理为条件向量；
+        # 当前KITTI配置下为21维相机/增强参数+12维外参，共33维，不是图像特征。
+        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # 每个相机一个条件向量：(B,N,33)，此处为(1,1,33)
+        # GeometryDepthNet利用相机条件向量调制融合图像特征，并行预测：
+        # context为后续图像到体素转换提供语义特征；depth为每个像素预测112个深度bin的离散概率分布。
+        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # context:(1,1,128,48,160)，depth:(1,112,48,160)
+
         if hasattr(self, 'img_view_transformer'):
             # Context-Aware Query Generator（CAQG）：利用预测深度将当前
             # 图像的 context feature 提升并聚合到体素空间。该粗体素特征
@@ -123,16 +127,16 @@ class CGFormer(BaseModule):
         )
 
         return x, depth
-    
+
     def occ_encoder(self, x):
         # 配置中的 Fuser 即 Local-and-Global Encoder（LGE）：局部 Voxel
         # 分支保留细粒度几何，全局 TPV 分支建模三个平面上的长程依赖。
         if hasattr(self, 'occ_encoder_backbone'):
             x = self.occ_encoder_backbone(x)
-        
+
         if hasattr(self, 'occ_encoder_neck'):
             x = self.occ_encoder_neck(x)
-        
+
         return x
 
     def forward_train(self, data_dict):
@@ -142,13 +146,13 @@ class CGFormer(BaseModule):
 
         img_voxel_feats, depth = self.extract_img_feat(img_inputs, img_metas)
         voxel_feats_enc = self.occ_encoder(img_voxel_feats)
-        
+
         if len(voxel_feats_enc) > 1:
             voxel_feats_enc = [voxel_feats_enc[0]]
-        
+
         if type(voxel_feats_enc) is not list:
             voxel_feats_enc = [voxel_feats_enc]
-        
+
         output = self.pts_bbox_head(
             voxel_feats=voxel_feats_enc,
             img_metas=img_metas,
@@ -177,7 +181,7 @@ class CGFormer(BaseModule):
         }
 
         return train_output
-    
+
     def forward_test(self, data_dict):
         img_inputs = data_dict['img_inputs']
         img_metas = data_dict['img_metas']
@@ -188,10 +192,10 @@ class CGFormer(BaseModule):
 
         if len(voxel_feats_enc) > 1:
             voxel_feats_enc = [voxel_feats_enc[0]]
-        
+
         if type(voxel_feats_enc) is not list:
             voxel_feats_enc = [voxel_feats_enc]
-        
+
         output = self.pts_bbox_head(
             voxel_feats=voxel_feats_enc,
             img_metas=img_metas,

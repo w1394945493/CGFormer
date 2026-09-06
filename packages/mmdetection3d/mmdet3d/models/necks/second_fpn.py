@@ -81,11 +81,21 @@ class SECONDFPN(BaseModule):
         Returns:
             list[torch.Tensor]: Multi-level feature maps.
         """
+        # x是backbone输出的多尺度特征列表；CGFormer中共有5层，通道数分别为
+        # [48, 80, 224, 640, 2560]，各层空间分辨率并不相同。
         assert len(x) == len(self.in_channels)
+        # 每层特征分别经过对应deblock。deblock根据upsample_strides执行上采样
+        # 或下采样，并统一输出通道数，使所有结果具有相同的H×W，CGFormer中
+        # 对齐到输入图像的1/8分辨率，每一路均输出128通道。
         ups = [deblock(x[i]) for i, deblock in enumerate(self.deblocks)]
 
         if len(ups) > 1:
+            # 将对齐后的多尺度特征沿通道维拼接成一个特征张量，而不是继续
+            # 保留多尺度列表。CGFormer中5路各128通道，因此得到640通道。
             out = torch.cat(ups, dim=1)
         else:
+            # 只有一路输入时无需拼接，直接将该路作为最终融合特征。
             out = ups[0]
+        # 返回值虽然使用list封装，但其中只有一个融合后的单尺度特征图；
+        # CGFormer.image_encoder随后通过x=x[0]取出该(B*N,640,H/8,W/8)张量。
         return [out]
