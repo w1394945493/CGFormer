@@ -103,12 +103,14 @@ class CGFormer(BaseModule):
 
         # *============================================*
         # * 深度先验stereo_depth=img_metas['stereo_depth']两方面作用：(1) 用于概率深度分布depth的预测；(2) 选取当前图像可见的候选体素
+        # * 显式深度stereo depth作用一: 为最终概率深度分布提供较可靠的几何先验，修正纯图像预测的深度概率。
         # *============================================*
         # * 概率深度分布：这里预测的depth是每个像素在多个离散深度区间上的概率，用于两个地方：(1) LSS粗体素特征提取；(2) VoxFormer Head中作为深度调制信息
         # GeometryDepthNet利用相机条件向量调制融合图像特征，并行预测：
         # context为后续图像到体素转换提供语义特征；depth为每个像素预测112个深度bin的离散概率分布。
-        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # context:(1,1,128,48,160)，depth:(1,112,48,160)
+        context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # * context:(1,1,128,48,160)，概率深度分布：depth:(1,112,48,160)
 
+        # * 概率深度depth作用一：控制二维上下文特征沿相机射线向各个深度位置分配，并生成场景相关的粗三维体素特征
         if hasattr(self, 'img_view_transformer'): #LSSViewTransformer：得到粗糙的三维体素特征
             # Context-Aware Query Generator（CAQG）：利用预测深度将当前
             # 图像的 context feature 提升并聚合到体素空间。该粗体素特征
@@ -116,8 +118,9 @@ class CGFormer(BaseModule):
             coarse_queries = self.img_view_transformer(context, depth, img_inputs[1:7]) # * depth(1): 通过LSS方式产生上下文相关的粗三维特征，用于初始化VQ
         else:
             coarse_queries = None
+
         # *============================================*
-        # * 根据显式深度图，选取当前相机可见的候选体素，后续只对这些体素执行昂贵的 cross-attention。
+        # * 显式深度stereo depth作用二: 找出深度表面对应的可见体素，只让这些体素 query 执行昂贵的 3D deformable cross-attention。
         # 仅让可见/候选体素参与昂贵的 cross-attention，随后再通过
         # self-attention 将信息由可见区域扩散到遮挡及不可见区域。
         proposal = self.proposal_layer(img_inputs[1:7], img_metas)
