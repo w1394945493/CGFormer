@@ -49,7 +49,7 @@ class LSSViewTransformer(BaseModule):
         # D x H x W x 3
         frustum = torch.stack((xs, ys, ds), -1)
         return nn.Parameter(frustum, requires_grad=False)
-    
+
     def voxel_pooling(self, geom_feats, x):
         B, N, D, H, W, C = x.shape
         Nprime = B * N * D * H * W
@@ -68,13 +68,13 @@ class LSSViewTransformer(BaseModule):
                & (geom_feats[:, 2] >= 0) & (geom_feats[:, 2] < self.nx[2])
         x = x[kept]
         geom_feats = geom_feats[kept]
-        
+
         # [b, c, z, x, y] == [b, c, x, y, z]
         final = bev_pool(x, geom_feats, B, self.nx[2], self.nx[0], self.nx[1])
         final = final.permute(0, 1, 3, 4, 2)
 
         return final
-    
+
     def get_geometry(self, rots, trans, intrins, post_rots, post_trans, bda):
         """Determine the (x,y,z) locations (in the ego frame)
         of the points in the point cloud.
@@ -91,26 +91,26 @@ class LSSViewTransformer(BaseModule):
         points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3],
                             points[:, :, :, :, :, 2:3]
                             ), 5)
-        
+
         if intrins.shape[3] == 4: # for KITTI
             shift = intrins[:, :, :3, 3]
             points = points - shift.view(B, N, 1, 1, 1, 3, 1)
             intrins = intrins[:, :, :3, :3]
-        
+
         combine = rots.matmul(torch.inverse(intrins))
         points = combine.view(B, N, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
         points += trans.view(B, N, 1, 1, 1, 3)
-        
+
         if bda.shape[-1] == 4:
             points = torch.cat((points, torch.ones(*points.shape[:-1], 1).type_as(points)), dim=-1)
             points = bda.view(B, 1, 1, 1, 1, 4, 4).matmul(points.unsqueeze(-1)).squeeze(-1)
             points = points[..., :3]
         else:
             points = bda.view(B, 1, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1)).squeeze(-1)
-        
+
         return points
 
-    
+
     def forward(self, feat, depth_prob, cam_params):
         B, N, C, H, W = feat.shape
         rots, trans, intrins, post_rots, post_trans, bda = cam_params
@@ -119,6 +119,8 @@ class LSSViewTransformer(BaseModule):
             db, cb, dh, dw = depth_prob.shape
             assert db == B * N
             depth_prob = depth_prob.view(B, N, cb, dh, dw)
+        # *============================================*
+        # * Lift & Splat：把每个像素的 context feature 按深度概率提升到 3D，生成场景相关的粗体素 query。
         # Lift：把每个像素的 context feature 与其各深度 bin 的概率相乘，
         # 沿相机射线展开成带语义权重的视锥体特征 (B,N,D,H,W,C)。
         volume = depth_prob.unsqueeze(2) * feat.unsqueeze(3)

@@ -46,9 +46,10 @@ class VoxFormerHead(nn.Module):
         self.volume_w = volume_w
         self.volume_z = volume_z
         self.embed_dims = embed_dims
-        
+
         self.data_config = data_config
         self.point_cloud_range = point_cloud_range
+        # * 固定的可学习体素：volume_embed
         self.volume_embed = nn.Embedding((self.volume_h) * (self.volume_w) * (self.volume_z), self.embed_dims)
         # self.voxelize = Voxelization(point_cloud_range=point_cloud_range, spatial_shape=np.array([volume_h, volume_w, volume_z]))
         self.positional_encoding = build_positional_encoding(positional_encoding)
@@ -74,15 +75,15 @@ class VoxFormerHead(nn.Module):
 
     def get_voxel_indices(self):
         xv, yv, zv = torch.meshgrid(
-            torch.arange(self.volume_h), torch.arange(self.volume_w),torch.arange(self.volume_z), 
+            torch.arange(self.volume_h), torch.arange(self.volume_w),torch.arange(self.volume_z),
             indexing='ij')
-        
+
         idx = torch.arange(self.volume_h * self.volume_w * self.volume_z)
         vox_coords = torch.cat([xv.reshape(-1, 1), yv.reshape(-1, 1), zv.reshape(-1, 1), idx.reshape(-1, 1)], dim=-1)
 
         ref_3d = torch.cat(
-            [(xv.reshape(-1, 1) + 0.5) / self.volume_h, 
-             (yv.reshape(-1, 1) + 0.5) / self.volume_w, 
+            [(xv.reshape(-1, 1) + 0.5) / self.volume_h,
+             (yv.reshape(-1, 1) + 0.5) / self.volume_w,
              (zv.reshape(-1, 1) + 0.5) / self.volume_z], dim=-1
         )
 
@@ -96,7 +97,7 @@ class VoxFormerHead(nn.Module):
 
         grid = torch.stack((xs, ys), 1)
         return nn.Parameter(grid, requires_grad=False)
-    
+
     def forward(self, mlvl_feats, proposal, cam_params, lss_volume=None, img_metas=None,  **kwargs):
         """ Forward funtion.
         Args:
@@ -108,11 +109,15 @@ class VoxFormerHead(nn.Module):
             cam_params: Transformation matrix, (rots, trans, intrins, post_rots, post_trans, bda)
         """
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
-        dtype, device = mlvl_feats[0].dtype, mlvl_feats[0].device        
+        dtype, device = mlvl_feats[0].dtype, mlvl_feats[0].device
 
+        # *=============================================*
+        # * 固定可学习体素：
         # 可学习 embedding 提供与位置相关的基础 query；CAQG 产生的
         # lss_volume 再注入当前图像上下文，使 query 对输入场景自适应。
         volume_queries = self.volume_embed.weight.to(dtype)
+        # *=============================================*
+        # * 在VoxFormerHead中，将 lss_volume注入volume_queries，作为cross-attention的query输入。
         if lss_volume is not None:
             # Todo: support batch size > 1
             assert lss_volume.shape[0] == 1
@@ -129,8 +134,11 @@ class VoxFormerHead(nn.Module):
         vox_coords, ref_3d = self.vox_coords.clone(), self.ref_3d.clone()
         # proposal = torch.zeros([bs, self.volume_h, self.volume_w, self.volume_z])
         # proposal[unq[:, 0], unq[:, 1], unq[:, 2], unq[:, 3]] = 1
-        unmasked_idx = torch.nonzero(proposal.reshape(-1) > 0).view(-1)
-        masked_idx = torch.nonzero(proposal.reshape(-1) == 0).view(-1)
+        unmasked_idx = torch.nonzero(proposal.reshape(-1) > 0).view(-1) #* 深度点命中的可见表明体素，执行图像cross-attention
+        masked_idx = torch.nonzero(proposal.reshape(-1) == 0).view(-1)  #* 其余体素，暂时没有可靠图像对应关系
+
+        # *============================================*
+        # * 通过deformable cross-attention对可见体素执行图像查询，得到可靠的 seed features。
         # 对 proposal 指定的可见体素执行 3D deformable cross-attention，
         # 得到可靠的 seed features，避免在全部体素上进行昂贵图像查询。
         seed_feats = self.cross_transformer.get_vox_features(
@@ -158,7 +166,9 @@ class VoxFormerHead(nn.Module):
             # 不可见体素不能直接从图像取到可靠特征，使用 CAQG 的粗体素
             # 先验经 MLP 初始化，再交给 self-attention 做全场景传播。
             vox_feats_flatten[vox_coords[masked_idx, 3], :] = self.mlp_prior(lss_volume_flatten[masked_idx, :])
-        
+
+        # *============================================*
+        # * 通过deformable self-attention将可见体素的上下文信息扩散到遮挡/不可见体素，完成 sparse-to-dense。·
         # 从可见 seed 向遮挡/不可见区域扩散上下文，完成 sparse-to-dense。
         vox_feats_diff = self.self_transformer.diffuse_vox_features(
             mlvl_feats,

@@ -43,7 +43,7 @@ class CGFormer(BaseModule):
             # ③ Context-Aware Query Generator（CAQG）的视图变换部分：
             # 按深度概率把当前图像的 context feature 从视锥体聚合到体素空间，
             # 生成与输入场景相关的粗 3D volume，用来初始化 voxel queries。
-            self.img_view_transformer = builder.build_neck(img_view_transformer)
+            self.img_view_transformer = builder.build_neck(img_view_transformer) #* LSSViewTransformer:把每个像素的上下文特征沿不同深度分配到三维空间
 
         # ④ 稀疏体素提议：根据深度/投影关系选择当前相机可见的候选体素。
         # 后续只对这些体素执行较昂贵的 cross-attention，以降低计算和显存。
@@ -95,10 +95,13 @@ class CGFormer(BaseModule):
         # 对齐到输入图像的1/8分辨率并沿通道拼接；这里得到的是融合后的单尺度图像特征
         # ================================================#
         img_enc_feats = self.image_encoder(img_inputs[0]) # 输入图像(1,1,3,384,1280) -> 融合特征(1,1,640,48,160)
+
         # ================================================#
         # 将每个相机的内参、camera-to-ego外参及图像/BEV增强参数整理为条件向量；
         # 当前KITTI配置下为21维相机/增强参数+12维外参，共33维，不是图像特征。
         mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # 每个相机一个条件向量：(B,N,33)，此处为(1,1,33)
+        # *============================================*
+        # *概率深度分布：这里预测的depth是每个像素在多个离散深度区间上的概率，用于两个地方：
         # GeometryDepthNet利用相机条件向量调制融合图像特征，并行预测：
         # context为后续图像到体素转换提供语义特征；depth为每个像素预测112个深度bin的离散概率分布。
         context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # context:(1,1,128,48,160)，depth:(1,112,48,160)
@@ -107,10 +110,11 @@ class CGFormer(BaseModule):
             # Context-Aware Query Generator（CAQG）：利用预测深度将当前
             # 图像的 context feature 提升并聚合到体素空间。该粗体素特征
             # 会初始化 query，避免所有场景都只使用相同的可学习 query。
-            coarse_queries = self.img_view_transformer(context, depth, img_inputs[1:7])
+            coarse_queries = self.img_view_transformer(context, depth, img_inputs[1:7]) # * depth(1): 通过LSS方式产生上下文相关的粗三维特征，用于初始化VQ
         else:
             coarse_queries = None
-
+        # *============================================*
+        #* 根据显式深度图，选取当前相机可见的候选体素，后续只对这些体素执行昂贵的 cross-attention。
         # 仅让可见/候选体素参与昂贵的 cross-attention，随后再通过
         # self-attention 将信息由可见区域扩散到遮挡及不可见区域。
         proposal = self.proposal_layer(img_inputs[1:7], img_metas)
@@ -119,11 +123,11 @@ class CGFormer(BaseModule):
             [context],
             proposal,
             cam_params=img_inputs[1:7],
-            lss_volume=coarse_queries,
+            lss_volume=coarse_queries, #* 由上下文特征C和深度分布D生成的lss_volume
             img_metas=img_metas,
             # CGVT 的 3D deformable cross-attention 使用该深度分布区分
             # 投影到相近二维像素、但处于不同深度位置的体素。
-            mlvl_dpt_dists=[depth.unsqueeze(1)]
+            mlvl_dpt_dists=[depth.unsqueeze(1)] #* depth(2): 作为3D deformable cross-attention的深度维信息
         )
 
         return x, depth
