@@ -233,6 +233,8 @@ class GeometryDepth_Net(BaseModule):
         # x 是图像编码器输出；其余参数描述相机内外参和图像/BEV增强。
         # mlp_input 已由 get_mlp_input() 整理为每个相机的条件向量。
         x, rots, trans, intrins, post_rots, post_trans, bda, mlp_input = input # (1 1 640 48 160) (1 1 33)
+        # ==========================================================#
+        # 显式深度图(1)
         # 读取外部几何/立体深度图，作为比纯单目预测更可靠的几何先验。
         stereo_depth = img_metas['stereo_depth']  # (B, N, H_img, W_img) # (1 1 384 1280)
 

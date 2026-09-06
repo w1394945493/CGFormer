@@ -100,13 +100,16 @@ class CGFormer(BaseModule):
         # 将每个相机的内参、camera-to-ego外参及图像/BEV增强参数整理为条件向量；
         # 当前KITTI配置下为21维相机/增强参数+12维外参，共33维，不是图像特征。
         mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # 每个相机一个条件向量：(B,N,33)，此处为(1,1,33)
+
         # *============================================*
-        # *概率深度分布：这里预测的depth是每个像素在多个离散深度区间上的概率，用于两个地方：
+        # * 深度先验stereo_depth=img_metas['stereo_depth']两方面作用：(1) 用于概率深度分布depth的预测；(2) 选取当前图像可见的候选体素
+        # *============================================*
+        # * 概率深度分布：这里预测的depth是每个像素在多个离散深度区间上的概率，用于两个地方：(1) LSS粗体素特征提取；(2) VoxFormer Head中作为深度调制信息
         # GeometryDepthNet利用相机条件向量调制融合图像特征，并行预测：
         # context为后续图像到体素转换提供语义特征；depth为每个像素预测112个深度bin的离散概率分布。
         context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # context:(1,1,128,48,160)，depth:(1,112,48,160)
 
-        if hasattr(self, 'img_view_transformer'):
+        if hasattr(self, 'img_view_transformer'): #LSSViewTransformer：得到粗糙的三维体素特征
             # Context-Aware Query Generator（CAQG）：利用预测深度将当前
             # 图像的 context feature 提升并聚合到体素空间。该粗体素特征
             # 会初始化 query，避免所有场景都只使用相同的可学习 query。
@@ -114,7 +117,7 @@ class CGFormer(BaseModule):
         else:
             coarse_queries = None
         # *============================================*
-        #* 根据显式深度图，选取当前相机可见的候选体素，后续只对这些体素执行昂贵的 cross-attention。
+        # * 根据显式深度图，选取当前相机可见的候选体素，后续只对这些体素执行昂贵的 cross-attention。
         # 仅让可见/候选体素参与昂贵的 cross-attention，随后再通过
         # self-attention 将信息由可见区域扩散到遮挡及不可见区域。
         proposal = self.proposal_layer(img_inputs[1:7], img_metas)
