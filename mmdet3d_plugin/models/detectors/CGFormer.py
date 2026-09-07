@@ -108,6 +108,7 @@ class CGFormer(BaseModule):
         # * 概率深度分布：这里预测的depth是每个像素在多个离散深度区间上的概率，用于两个地方：(1) LSS粗体素特征提取；(2) VoxFormer Head中作为深度调制信息
         # GeometryDepthNet利用相机条件向量调制融合图像特征，并行预测：
         # context为后续图像到体素转换提供语义特征；depth为每个像素预测112个深度bin的离散概率分布。
+        # 论文3.2 Depth Net
         context, depth = self.depth_net([img_enc_feats] + img_inputs[1:7] + [mlp_input], img_metas) # * context:(1,1,128,48,160)，概率深度分布：depth:(1,112,48,160)
 
         # * 概率深度depth作用一：控制二维上下文特征沿相机射线向各个深度位置分配，并生成场景相关的粗三维体素特征

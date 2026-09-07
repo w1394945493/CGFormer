@@ -156,8 +156,8 @@ class SimpleUnet3D(nn.Module):
         self.redir1 = convbn_3d(in_channels, in_channels, kernel_size=1, stride=1, pad=0)
         self.redir2 = convbn_3d(in_channels * 2, in_channels * 2, kernel_size=1, stride=1, pad=0)
 
-    def forward(self, x):
-        conv1 = self.conv1(x)
+    def forward(self, x): # (1 32 112 48 160)
+        conv1 = self.conv1(x) 
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
         conv4 = self.conv4(conv3)
@@ -270,10 +270,10 @@ class DepthAggregation(nn.Module):
         self.out_conv = nn.Conv3d(embed_dims, out_channels, kernel_size=3, stride=1, padding=1)
         
     def forward(self, depth_stereo, depth_mono):
-        mono_stereo = self.mono_stereo_attention(depth_mono, depth_stereo)
-        stereo_mono = self.stereo_mono_attention(depth_stereo, depth_mono)
+        mono_stereo = self.mono_stereo_attention(depth_mono, depth_stereo) # (1 112 48 160)
+        stereo_mono = self.stereo_mono_attention(depth_stereo, depth_mono) # (1 112 48 160)
         
-        depth_feat = torch.cat([mono_stereo.unsqueeze(1), stereo_mono.unsqueeze(1)], dim=1)
+        depth_feat = torch.cat([mono_stereo.unsqueeze(1), stereo_mono.unsqueeze(1)], dim=1) # (1 2 112 48 160)
         # depth_feat = torch.cat([mono_stereo, stereo_mono], dim=1)
 
         depth_feat = F.relu(self.stem(depth_feat))

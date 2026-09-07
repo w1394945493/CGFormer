@@ -230,6 +230,14 @@ class GeometryDepth_Net(BaseModule):
 
     def forward(self, input, img_metas):
         """融合单目预测与几何深度先验，输出上下文特征和深度分布。"""
+        '''            
+            rot: 相机坐标系到自车坐标系的旋转，形状为 (B, N, 3, 3)。
+            tran: 相机坐标系到自车坐标系的平移，形状为 (B, N, 3)。
+            intrin: 相机内参/投影矩阵，KITTI 中通常为齐次 4x4 矩阵。
+            post_rot: 图像 resize、crop、flip 后对应的旋转/缩放矩阵。
+            post_tran: 图像增强产生的二维平移。
+            bda: BEV Data Augmentation 变换；未提供时使用单位矩阵。
+        '''
         # x 是图像编码器输出；其余参数描述相机内外参和图像/BEV增强。
         # mlp_input 已由 get_mlp_input() 整理为每个相机的条件向量。
         x, rots, trans, intrins, post_rots, post_trans, bda, mlp_input = input # (1 1 640 48 160) (1 1 33)
@@ -243,6 +251,8 @@ class GeometryDepth_Net(BaseModule):
         # DepthNet 是普通 2D 网络，因此把 B、N 合并后逐张图像处理。
         x = x.view(B * N, C, H, W)  # (1 640 48 160) # 合并批次和相机维
 
+        # ====================================================================#
+        # 论文3.2(1) Depth Net 单目图像深度估计的结果通常不够理想。引入极线约束能够帮助模型估计出更加准确的深度图。
         # 单目分支：DepthNet 使用 mlp_input 通过 MLP/SE 调制图像特征，
         # 使输出能够感知焦距、相机位姿和数据增强带来的几何变化。
         x = self.depth_net(x, mlp_input)  # (B*N, D+numC_Trans, H, W) (1 240 48 160)
@@ -252,6 +262,10 @@ class GeometryDepth_Net(BaseModule):
         mono_volume = self.get_depth_dist(mono_digit)  # (1 112 48 160) # (B*N, D, H, W)
         # 后 numC_Trans 个通道保留图像语义，后续用于 CAQG 和 CGVT。
         img_feat = x[:, self.D:self.D + self.numC_Trans, ...]  # (B*N, C_ctx, H, W)
+
+        # ====================================================================#
+        # 论文3.2(2) Depth Net 然而，如果通过计算左右图像之间的特征相关性来利用极线约束，会在语义体素估计过程中引入较大的计算负担。
+        # 为此，我们提出了一种简单而有效的深度细化策略。对MobileStereo生成的深度图通过卷积进行编码，得到立体深度特征
 
         # 几何分支：将连续深度图降采样到特征图尺度，并量化到与单目
         # 分支相同的 D 个深度 bin，方便两种深度信息逐位置融合。
@@ -263,12 +277,14 @@ class GeometryDepth_Net(BaseModule):
         stereo_volume = self.stereo_volume_encoder(stereo_volume)  # (1 112 48 160) # (B, D, H, W)
         stereo_volume = self.get_depth_dist(stereo_volume)  # (1 112 48 160) # 几何深度概率分布
 
+        # ====================================================================#
+        # 论文3.2(3) Depth Net 两种特征通过交叉注意力进行进一步处理，用于信息交互
         # 融合分支：先进行“单目关注几何、几何关注单目”的双向邻域注意力，
         # 再由 3D U-Net 同时建模深度轴和图像空间，输出融合深度 logits。
-        depth_volume = self.depth_aggregation(stereo_volume, mono_volume) # (1 112 48 160)
+        depth_volume = self.depth_aggregation(stereo_volume, mono_volume) # (1 112 48 160) depth_aggregation:modules/Stereo_Depth_Net_modules
         # 最后沿深度维softmax归一化。该分布既用于把 img_feat 提升到 3D，
         # 也用于约束 3D deformable cross-attention 的深度采样。
-        depth_volume = self.get_depth_dist(depth_volume)  # (1 112 48 160) # (B, D, H, W) softmax归一化
+        depth_volume = self.get_depth_dist(depth_volume)  # get_depth_dist: softmax # (1 112 48 160) # (B, D, H, W) softmax归一化
 
         # 恢复 context feature 的相机维；深度输出按当前单相机实现保持 4 维。
         return img_feat.view(B, N, -1, H, W), depth_volume # (11 128 48 160) (1 112 48 160)
