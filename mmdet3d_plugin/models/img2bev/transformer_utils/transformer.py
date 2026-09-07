@@ -206,43 +206,43 @@ class PerceptionTransformer_DFA3D(PerceptionTransformer):
     @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'prev_bev', 'bev_pos'))
     def get_vox_features(
             self,
-            mlvl_feats,
-            bev_queries,
-            bev_h,
-            bev_w,
-            ref_3d,
-            vox_coords,
-            unmasked_idx,
+            mlvl_feats, # 1:(1 1 128 48 160)
+            bev_queries, # (262144 128)
+            bev_h, # 128
+            bev_w, # 128
+            ref_3d, # (262144 3)
+            vox_coords, # (262144 4)
+            unmasked_idx, # (17999)
             cam_params=None,
             grid_length=[0.512, 0.512],
             bev_pos=None,
             prev_bev=None,
-            mlvl_dpt_dists=None,
+            mlvl_dpt_dists=None, # 1:(1 1 112 48 160)
             **kwargs):
         """
         obtain voxel features.
         """
-
+        # 3D deformable cross-attention: 从全部query中选取proposal 判定为
         bs = mlvl_feats[0].size(0)
         # To do, implement a function which supports bs > 1
         assert bs == 1
-        bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1) #  #[N, 1, 64]
-        bev_pos = bev_pos.flatten(2).permute(2, 0, 1) # [N, 1, 64]
+        bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1) # (262144 1 128) #  #[N, 1, 64] # 给体素query增加bs维度，
+        bev_pos = bev_pos.flatten(2).permute(2, 0, 1) # (262144 1 128) # 将位置编码展开成体素序列
 
-        unmasked_bev_queries = bev_queries[vox_coords[unmasked_idx, 3], :, :]
-        unmasked_bev_bev_pos = bev_pos[vox_coords[unmasked_idx, 3], :, :]
+        unmasked_bev_queries = bev_queries[vox_coords[unmasked_idx, 3], :, :] # (17999 1 128) # 只选择可见体素
+        unmasked_bev_bev_pos = bev_pos[vox_coords[unmasked_idx, 3], :, :] # (17999 1 128) # 选取可见体素的三维参考点
 
         unmasked_ref_3d = ref_3d[vox_coords[unmasked_idx, 3], :]
         unmasked_ref_3d = unmasked_ref_3d.unsqueeze(0).unsqueeze(0).to(unmasked_bev_queries.device)
-        
+        # 展平多尺度图像特征：CGFormer只有一个尺度，代码按多尺度通用形式实现
         feat_flatten = []
         spatial_shapes = []
         dpt_dist_flatten = []
         for lvl, (feat, dpt_dist) in enumerate(zip(mlvl_feats, mlvl_dpt_dists)):
             bs, num_cam, c, h, w = feat.shape
             spatial_shape = (h, w)
-            feat = feat.flatten(3).permute(1, 0, 3, 2)
-            dpt_dist = dpt_dist.flatten(3).permute(1, 0, 3, 2)
+            feat = feat.flatten(3).permute(1, 0, 3, 2) # (1 1 7680 128) # 展平图像特征
+            dpt_dist = dpt_dist.flatten(3).permute(1, 0, 3, 2) # (1 1 7680 112) 展平概率深度分布
             if self.use_cams_embeds:
                 feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
             feat = feat + self.level_embeds[None,
@@ -259,17 +259,19 @@ class PerceptionTransformer_DFA3D(PerceptionTransformer):
             (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
 
         feat_flatten = feat_flatten.permute(0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
-
+        
+        # ============================================#
+        # encoder.VoxFormerEncoder
         bev_embed = self.encoder(
-            unmasked_bev_queries,
-            feat_flatten,
-            feat_flatten,
-            value_dpt_dist=dpt_dist_flatten,
-            ref_3d=unmasked_ref_3d,
-            bev_h=bev_h,
-            bev_w=bev_w,
-            bev_pos=unmasked_bev_bev_pos,
-            spatial_shapes=spatial_shapes,
+            unmasked_bev_queries, # (17999 1 128) 可见体素
+            feat_flatten, # (1 7680 1 128) key 图像context token
+            feat_flatten, # (1 7680 1 128) value context token
+            value_dpt_dist=dpt_dist_flatten, # (1 1 7680 112) 图像像素深度概率
+            ref_3d=unmasked_ref_3d, # (1 1 17999 3)
+            bev_h=bev_h, # 128
+            bev_w=bev_w, # 128
+            bev_pos=unmasked_bev_bev_pos, # (17999 1 128)
+            spatial_shapes=spatial_shapes, # (1 2)
             level_start_index=level_start_index,
             cam_params=cam_params,
             prev_bev=None,

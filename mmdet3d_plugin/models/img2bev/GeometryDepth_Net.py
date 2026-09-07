@@ -108,28 +108,30 @@ class GeometryDepth_Net(BaseModule):
 
         return self.loss_depth_weight * depth_loss
 
-    def get_downsampled_gt_depth(self, gt_depths):
+    def get_downsampled_gt_depth(self, gt_depths): # gt_depth:(1 1 H W) 每个位置保存以m为单位的深度
         """
         Input:
             gt_depths: [B, N, H, W]
         Output:
             gt_depths: [B*N*h*w, d]
         """
-        B, N, H, W = gt_depths.shape
-        gt_depths = gt_depths.view(B * N,
-                                   H // self.downsample, self.downsample,
-                                   W // self.downsample, self.downsample, 1)
-        gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
-        gt_depths = gt_depths.view(-1, self.downsample * self.downsample)
-        gt_depths_tmp = torch.where(gt_depths == 0.0, 1e5 * torch.ones_like(gt_depths), gt_depths)
-        gt_depths = torch.min(gt_depths_tmp, dim=-1).values
+        # (1) 把8x8区域组织到一起，即把原深度图划分成8x8小块，每个小块包含64个原始深度值
+        B, N, H, W = gt_depths.shape # (1 1 384 1280)
+        gt_depths = gt_depths.view(B * N, H // self.downsample, self.downsample, W // self.downsample, self.downsample, 1) # (1 48 8 160 8 1)
+        gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous() # (1 48 160 1 8 8)
+        gt_depths = gt_depths.view(-1, self.downsample * self.downsample) # (7680 64) 每一行对应一个低分辨率像素对应的64个原始深度值
+        # (2) 执行有效深度min-pooling
+        gt_depths_tmp = torch.where(gt_depths == 0.0, 1e5 * torch.ones_like(gt_depths), gt_depths) # 将无效的0暂时替换为一个很大值，避免全取0(例如lidar投影得到的是稀疏深度图，很多位置为0)
+        gt_depths = torch.min(gt_depths_tmp, dim=-1).values # 优先保留最靠近相机的表面，这也与遮挡关系一致：最近表面通常会遮挡后方物体
         gt_depths = gt_depths.view(B * N, H // self.downsample, W // self.downsample)
-
+        # (3) 将米制深度转换成depth-bin编号
+        # 减去dmin-Δd/2的原因：尝试让离散深度值围绕 bin 中心对齐。
         # [min - step / 2, min + step / 2] creates min depth
         gt_depths = (gt_depths - (self.grid_config['dbound'][0] - self.grid_config['dbound'][2] / 2)) / self.grid_config['dbound'][2]
-        gt_depths_vals = gt_depths.clone()
-
+        gt_depths_vals = gt_depths.clone() # 保存离散化前的连续bin坐标：保存的不是原始米制深度，而是已经变换后的浮点 bin 坐标
+        # (4) 过滤非法深度：不合法的深度设置为0：小于或超出深度范围的值
         gt_depths = torch.where((gt_depths < self.D + 1) & (gt_depths >= 0.0), gt_depths, torch.zeros_like(gt_depths))
+        # (5) 转换为one-hot并删除无效类别：有效深度位置：112维中恰好有1，无效深度位置：112维度中全为0
         gt_depths = F.one_hot(gt_depths.long(), num_classes=self.D + 1).view(-1, self.D + 1)[:, 1:]
 
         return gt_depths_vals, gt_depths.float()
@@ -137,7 +139,7 @@ class GeometryDepth_Net(BaseModule):
     def get_depth_dist(self, x):
         return x.softmax(dim=1)
 
-    def get_mlp_input(self, rot, tran, intrin, post_rot, post_tran, bda=None):
+    def get_mlp_input(self, rot, tran, intrin, post_rot, post_tran, bda=None): # rot (1 1 3 3) tran (1 1 3)
         """把相机参数与数据增强参数编码成 DepthNet 的条件向量。
 
         该函数不直接生成图像/深度特征，而是为 batch 中的每个相机整理
@@ -252,27 +254,27 @@ class GeometryDepth_Net(BaseModule):
         x = x.view(B * N, C, H, W)  # (1 640 48 160) # 合并批次和相机维
 
         # ====================================================================#
-        # 论文3.2(1) Depth Net 单目图像深度估计的结果通常不够理想。引入极线约束能够帮助模型估计出更加准确的深度图。
+        # * 论文3.2(1) Depth Net 单目图像深度估计的结果通常不够理想。引入极线约束能够帮助模型估计出更加准确的深度图。
         # 单目分支：DepthNet 使用 mlp_input 通过 MLP/SE 调制图像特征，
         # 使输出能够感知焦距、相机位姿和数据增强带来的几何变化。
-        x = self.depth_net(x, mlp_input)  # (B*N, D+numC_Trans, H, W) (1 240 48 160)
-        # 前 D 个通道表示每个像素属于各离散深度区间的未归一化分数。
-        mono_digit = x[:, :self.D, ...]  # (1 112 48 160) # (B*N, D, H, W)
-        # 沿 D 个深度 bin 做 softmax，得到每个像素的单目深度概率分布。
+        # 基本沿用BEVDepth中的相机感知的深度预测部分工作， 同时增加了相机条件的上下文调制分支
+        x = self.depth_net(x, mlp_input)  # (B*N, D+numC_Trans, H, W) (1 240 48 160) 240=112(深度分支)+128(上下文分支)
+        # 前 D1=112 个通道表示每个像素属于各离散深度区间的未归一化分数。
+        mono_digit = x[:, :self.D, ...]  # (1 112 48 160) # (B*N, D, H, W) 前
+        # 沿 D1=112 个深度 bin 做 softmax，得到每个像素的单目深度概率分布。
         mono_volume = self.get_depth_dist(mono_digit)  # (1 112 48 160) # (B*N, D, H, W)
-        # 后 numC_Trans 个通道保留图像语义，后续用于 CAQG 和 CGVT。
-        img_feat = x[:, self.D:self.D + self.numC_Trans, ...]  # (B*N, C_ctx, H, W)
+        # 后 numC_Trans=128 个通道保留图像语义，后续用于 CAQG 和 CGVT。
+        img_feat = x[:, self.D:self.D + self.numC_Trans, ...]  # (1 128 48 160) # (B*N, C_ctx, H, W) 
+        # * 除了camera-aware的context feature调制，CGFormer在此基础上增加的主要内容：把 camera-aware 单目概率作为Dm，再与 MobileStereoNet 产生的Ds进行双向邻域交叉注意力和三维卷积融合。
 
         # ====================================================================#
-        # 论文3.2(2) Depth Net 然而，如果通过计算左右图像之间的特征相关性来利用极线约束，会在语义体素估计过程中引入较大的计算负担。
-        # 为此，我们提出了一种简单而有效的深度细化策略。对MobileStereo生成的深度图通过卷积进行编码，得到立体深度特征
-
-        # 几何分支：将连续深度图降采样到特征图尺度，并量化到与单目
-        # 分支相同的 D 个深度 bin，方便两种深度信息逐位置融合。
-        _, stereo_volume = self.get_downsampled_gt_depth(stereo_depth)  # (1 1 384 1280) -> (7680 112) # one-hot 深度
+        # 论文3.2(2) Depth Net 然而，如果通过计算左右图像之间的特征相关性来利用极线约束，会在语义体素估计过程中引入较大的计算负担。为此，我们提出了一种简单而有效的深度细化策略。对MobileStereo生成的深度图通过卷积进行编码，得到立体深度特征
+        # 立体分支：将连续深度图降采样到特征图尺度，并量化到与单目分支相同的 D 个深度 bin，方便两种深度信息逐位置融合。
+        # 把高分辨率稀疏/连续深度图转换成与 DepthNet 输出分辨率和深度通道数一致的监督标签或 stereo depth volume，便于进行逐位置融合
+        _, stereo_volume = self.get_downsampled_gt_depth(stereo_depth)  # (1 1 384 1280) -> (7680 112) # one-hot 深度 # 把原图分辨率下的连续深度图下采样并离散化成低分辨率的one-hot分布
         # 上一步返回展平的 (B*N*H*W,D)，这里恢复为 CNN 所需的
         # (B,D,H,W)。当前写法将 N 并入通道，因此标准配置要求 N=1。
-        stereo_volume = stereo_volume.view(B, H, W, -1).permute(0, 3, 1, 2) # (1 112 48 160)
+        stereo_volume = stereo_volume.view(B, H, W, -1).permute(0, 3, 1, 2) # (1 112 48 160) # 得到的是一个经过硬量化的one-hot 深度体，还不适合直接与单目概率交互。
         # 通过卷积和 U-Net 聚合邻域信息，补充并平滑稀疏的几何深度线索。
         stereo_volume = self.stereo_volume_encoder(stereo_volume)  # (1 112 48 160) # (B, D, H, W)
         stereo_volume = self.get_depth_dist(stereo_volume)  # (1 112 48 160) # 几何深度概率分布

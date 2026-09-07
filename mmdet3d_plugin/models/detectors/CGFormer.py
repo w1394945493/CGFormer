@@ -95,11 +95,11 @@ class CGFormer(BaseModule):
         # 对齐到输入图像的1/8分辨率并沿通道拼接；这里得到的是融合后的单尺度图像特征
         # ================================================#
         img_enc_feats = self.image_encoder(img_inputs[0]) # 输入图像(1,1,3,384,1280) -> 融合特征(1,1,640,48,160)
-
+        # 单目深度分支：沿用 BEVDepth 的 Camera-Aware Depth Prediction：
         # ================================================#
         # 将每个相机的内参、camera-to-ego外参及图像/BEV增强参数整理为条件向量；
         # 当前KITTI配置下为21维相机/增强参数+12维外参，共33维，不是图像特征。
-        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # 每个相机一个条件向量：(B,N,33)，此处为(1,1,33)
+        mlp_input = self.depth_net.get_mlp_input(*img_inputs[1:7]) # 每个相机一个条件向量：(B,N,33)，此处为(1,1,33) # 构造相机条件向量
 
         # *============================================*
         # * 深度先验stereo_depth=img_metas['stereo_depth']两方面作用：(1) 用于概率深度分布depth的预测；(2) 选取当前图像可见的候选体素
@@ -127,14 +127,14 @@ class CGFormer(BaseModule):
         proposal = self.proposal_layer(img_inputs[1:7], img_metas)
 
         x = self.VoxFormer_head(
-            [context],
-            proposal,
+            [context], # (1 1 128 48 160) 上下文图像特征
+            proposal, # (1 1 128 128 16) 可见性掩码
             cam_params=img_inputs[1:7],
-            lss_volume=coarse_queries, #* 由上下文特征C和深度分布D生成的lss_volume
+            lss_volume=coarse_queries, # (1 128 128 128 16) #* 由上下文特征C和深度分布D生成的lss_volume
             img_metas=img_metas,
             # CGVT 的 3D deformable cross-attention 使用该深度分布区分
             # 投影到相近二维像素、但处于不同深度位置的体素。
-            mlvl_dpt_dists=[depth.unsqueeze(1)] #* depth(2): 作为3D deformable cross-attention的深度维信息
+            mlvl_dpt_dists=[depth.unsqueeze(1)] # (1 112 48 160) # 预测的概率深度分布 #* depth(2): 作为3D deformable cross-attention的深度维信息
         )
 
         return x, depth

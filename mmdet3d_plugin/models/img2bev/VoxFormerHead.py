@@ -108,30 +108,30 @@ class VoxFormerHead(nn.Module):
             depth: Pre-estimated depth map, (B, 1, H_d, W_d)
             cam_params: Transformation matrix, (rots, trans, intrins, post_rots, post_trans, bda)
         """
-        bs, num_cam, _, _, _ = mlvl_feats[0].shape
+        bs, num_cam, _, _, _ = mlvl_feats[0].shape # (1 1 128 48 160)
         dtype, device = mlvl_feats[0].dtype, mlvl_feats[0].device
 
         # *=============================================*
         # * 固定可学习体素：
         # 可学习 embedding 提供与位置相关的基础 query；CAQG 产生的
         # lss_volume 再注入当前图像上下文，使 query 对输入场景自适应。
-        volume_queries = self.volume_embed.weight.to(dtype)
+        volume_queries = self.volume_embed.weight.to(dtype) # (262144 128)
         # *=============================================*
         # * 在VoxFormerHead中，将 lss_volume注入volume_queries，作为cross-attention的query输入。
-        if lss_volume is not None:
+        if lss_volume is not None: # (1 128 128 128 16) # 将LSS生成的场景相关的三维体素特征加入固定的可学习体素，使得Transformer query从场景共享变成随输入图像变化
             # Todo: support batch size > 1
-            assert lss_volume.shape[0] == 1
+            assert lss_volume.shape[0] == 1 # 仅实现batch_size=1的场景，后面squeeze删除了batch维度
             # lss_volume = self.aspp(lss_volume)
             lss_volume_flatten = lss_volume.flatten(2).squeeze(0).permute(1, 0)
-            volume_queries = volume_queries + lss_volume_flatten
+            volume_queries = volume_queries + lss_volume_flatten # (262144 128) # 加法融合：通用可学习先验+当前场景观测
 
         if proposal.sum() < 2:
             proposal = torch.ones_like(proposal)
         # Generate bev postional embeddings for cross and self attention
-        bev_pos_cross_attn = self.positional_encoding(torch.zeros((bs, 512, 512), device=volume_queries.device).to(dtype)).to(dtype) # [1, dim, 128*4, 128*4]
-        bev_pos_self_attn = self.positional_encoding(torch.zeros((bs, 512, 512), device=volume_queries.device).to(dtype)).to(dtype) # [1, dim, 128*4, 128*4]
+        bev_pos_cross_attn = self.positional_encoding(torch.zeros((bs, 512, 512), device=volume_queries.device).to(dtype)).to(dtype) # (1 128 512 512) # [1, dim, 128*4, 128*4]
+        bev_pos_self_attn = self.positional_encoding(torch.zeros((bs, 512, 512), device=volume_queries.device).to(dtype)).to(dtype) # (1 128 512 512) # [1, dim, 128*4, 128*4]
 
-        vox_coords, ref_3d = self.vox_coords.clone(), self.ref_3d.clone()
+        vox_coords, ref_3d = self.vox_coords.clone(), self.ref_3d.clone() # (262144 4) (262144 3)
         # proposal = torch.zeros([bs, self.volume_h, self.volume_w, self.volume_z])
         # proposal[unq[:, 0], unq[:, 1], unq[:, 2], unq[:, 3]] = 1
         unmasked_idx = torch.nonzero(proposal.reshape(-1) > 0).view(-1) #* 深度点命中的可见表明体素，执行图像cross-attention
@@ -143,14 +143,14 @@ class VoxFormerHead(nn.Module):
         # 得到可靠的 seed features，避免在全部体素上进行昂贵图像查询。
         seed_feats = self.cross_transformer.get_vox_features(
             mlvl_feats,
-            volume_queries,
-            self.volume_h,
-            self.volume_w,
-            ref_3d=ref_3d,
-            vox_coords=vox_coords,
-            unmasked_idx=unmasked_idx,
+            volume_queries, # (262144 128)
+            self.volume_h, # 128
+            self.volume_w, # 128
+            ref_3d=ref_3d, # (262144 3)
+            vox_coords=vox_coords, # (262144 4)
+            unmasked_idx=unmasked_idx, # (17999)
             grid_length=None,
-            bev_pos=bev_pos_cross_attn,
+            bev_pos=bev_pos_cross_attn, # (1 128 512 512)
             img_metas=img_metas,
             prev_bev=None,
             cam_params=cam_params,

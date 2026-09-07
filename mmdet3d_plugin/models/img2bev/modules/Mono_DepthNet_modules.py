@@ -162,7 +162,7 @@ class DepthNet(nn.Module):
                                       kernel_size=1,
                                       stride=1,
                                       padding=0)
-        
+
         self.bn = nn.BatchNorm1d(cam_channels)
         self.depth_mlp = Mlp(cam_channels, mid_channels, mid_channels)
         self.depth_se = SELayer(mid_channels)  # NOTE: add camera-aware
@@ -195,15 +195,19 @@ class DepthNet(nn.Module):
         )
 
     def forward(self, x, mlp_input):
-        mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))
-        x = self.reduce_conv(x)
-        context_se = self.context_mlp(mlp_input)[..., None, None]
+        # 基本沿用BEVDepth中camera-aware 调制：相机参数 -> 拼接并归一化 -> MLP -> SE重加权图像特征
+        # 同时对context分支做camera-aware调制，两个MLP和SE参数不共享，分别学习：哪些相机信息影响深度预测；哪些相机信息影响上下文特征
+        mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1])) # (1 33)
+        x = self.reduce_conv(x) # (1 640 48 160)
+        context_se = self.context_mlp(mlp_input)[..., None, None] # (1 640 1 1) 
         context = self.context_se(x, context_se)
         context = self.context_conv(context)
-        depth_se = self.depth_mlp(mlp_input)[..., None, None]
-        depth = self.depth_se(x, depth_se)
+        # ===================================================#
+        # 相机参数生成的条件向量送入SE并进行调制
+        depth_se = self.depth_mlp(mlp_input)[..., None, None] # MLP升维
+        depth = self.depth_se(x, depth_se) # SE重加权
         depth = self.depth_conv(depth)
-        return torch.cat([depth, context], dim=1)
+        return torch.cat([depth, context], dim=1) # (1 112 48 160) (1 128 48 160) -> (1 240 48 160)
 
 class ContextNet(nn.Module):
     def __init__(self, in_channels, mid_channels, context_channels, 
@@ -237,4 +241,3 @@ class ContextNet(nn.Module):
         context = self.context_se(x, context_se)
         context = self.context_conv(context)
         return context
-    

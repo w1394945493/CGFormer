@@ -212,7 +212,7 @@ class VoxFormerEncoder(TransformerLayerSequence):
         hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(
                 bs*2, len_bev, num_bev_level, 2)
 
-        
+        # 将归一化体素恢复成真实ego坐标
         reference_points_cam, bev_mask = self.point_sampling(
             ref_3d, self.pc_range, cam_params=cam_params, img_metas=kwargs['img_metas'], )
 
