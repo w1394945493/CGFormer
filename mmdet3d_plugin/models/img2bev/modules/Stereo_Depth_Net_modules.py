@@ -14,7 +14,7 @@ class Attention(nn.Module):
             dim=embed_dims, num_heads=1, kernel_size=kernel_size, bias=True, qkv_bias=True
         )
         self.gamma = nn.Parameter(torch.zeros(1))
-    
+
     def forward(self, q, kv):
         """
         q: b, c, h, w
@@ -38,7 +38,7 @@ def convbn_3d(in_channels, out_channels, kernel_size, stride, pad):
     return nn.Sequential(
         nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride,
                 padding=pad, bias=False),
-        build_norm_layer(norm_cfg, out_channels)[1] 
+        build_norm_layer(norm_cfg, out_channels)[1]
     )
 
 class StereoFeatNet(nn.Module):
@@ -52,15 +52,15 @@ class StereoFeatNet(nn.Module):
                       kernel_size=3,
                       stride=1,
                       padding=1),
-      
+
             build_norm_layer(norm_cfg, mid_channels)[1],
             nn.ReLU(),
         )
         self.bn = nn.BatchNorm1d(cam_channels)
-        
+
         self.feat_mlp = Mlp(cam_channels, mid_channels, mid_channels)
         self.feat_se = SELayer(mid_channels)  # NOTE: add camera-aware
-        
+
         self.feat_conv = nn.Sequential(
             nn.Conv2d(mid_channels,
                       depth_channels,
@@ -70,9 +70,9 @@ class StereoFeatNet(nn.Module):
         )
 
     def forward(self, x, mlp_input):
-        mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1])) 
-        x = self.reduce_conv(x) 
-        feat_se = self.feat_mlp(mlp_input)[..., None, None]   
+        mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))
+        x = self.reduce_conv(x)
+        feat_se = self.feat_mlp(mlp_input)[..., None, None]
         feat = self.feat_se(x, feat_se)
         feat = self.feat_conv(feat)
         return feat
@@ -132,32 +132,32 @@ class SimpleUnet3D(nn.Module):
         self.conv1 = nn.Sequential(
             convbn_3d(in_channels, in_channels * 2, 3, 2, 1),
             nn.ReLU(inplace=True))
-        
+
         self.conv2 = nn.Sequential(
             convbn_3d(in_channels * 2, in_channels * 2, 3, 1, 1),
             nn.ReLU(inplace=True))
-        
+
         self.conv3 = nn.Sequential(
             convbn_3d(in_channels * 2, in_channels * 4, 3, 2, 1),
             nn.ReLU(inplace=True))
-        
+
         self.conv4 = nn.Sequential(
             convbn_3d(in_channels * 4, in_channels * 4, 3, 1, 1),
             nn.ReLU(inplace=True))
-        
+
         self.conv5 = nn.Sequential(
             nn.ConvTranspose3d(in_channels * 4, in_channels * 2, 3, padding=1, output_padding=1, stride=2, bias=False),
             nn.BatchNorm3d(in_channels * 2))
-        
+
         self.conv6 = nn.Sequential(
             nn.ConvTranspose3d(in_channels * 2, in_channels, 3, padding=1, output_padding=1, stride=2, bias=False),
             nn.BatchNorm3d(in_channels))
-        
+
         self.redir1 = convbn_3d(in_channels, in_channels, kernel_size=1, stride=1, pad=0)
         self.redir2 = convbn_3d(in_channels * 2, in_channels * 2, kernel_size=1, stride=1, pad=0)
 
     def forward(self, x): # (1 32 112 48 160)
-        conv1 = self.conv1(x) 
+        conv1 = self.conv1(x)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
         conv4 = self.conv4(conv3)
@@ -176,14 +176,14 @@ class CostVolumeEncoder(nn.Module):
         self.downsample = downsample
 
         D = self.ds.shape[1]
-        
+
         self.UNet = nn.Sequential(
             SimpleUnet(D),
             SimpleUnet(D)
         )
-        
+
         self.conv_out = nn.Conv2d(D, D, kernel_size=1, stride=1, padding=0)
-    
+
     def forward(self, x, mlp_input, calib):
         assert x.shape[1] == 2
         b, n, c, h, w = x.shape
@@ -236,7 +236,7 @@ class ChannelAttention3D(nn.Module):
             nn.GELU(),
             nn.Conv3d(embed_dims//8, embed_dims, kernel_size=1, stride=1, dilation=1, padding=0),
             nn.GELU(),
-  
+
         )
         self.sigmoid = nn.Sigmoid()
         self.conv = nn.Sequential(
@@ -246,7 +246,7 @@ class ChannelAttention3D(nn.Module):
         )
 
         self.layer_scale = nn.Parameter(torch.zeros(1))
-    
+
     def forward(self, input):
         x = self.conv1(input)
         y = self.sigmoid(self.conv2(self.avg_pool(x)))
@@ -257,7 +257,7 @@ class ChannelAttention3D(nn.Module):
         return output_feat
 
 class DepthAggregation(nn.Module):
-    def __init__(self, 
+    def __init__(self,
         embed_dims=32,
         out_channels=1):
         super(DepthAggregation, self).__init__()
@@ -268,14 +268,17 @@ class DepthAggregation(nn.Module):
         self.UNet_3D = SimpleUnet3D(in_channels=embed_dims)
         self.channel_attention = ChannelAttention3D(embed_dims=embed_dims)
         self.out_conv = nn.Conv3d(embed_dims, out_channels, kernel_size=3, stride=1, padding=1)
-        
+
     def forward(self, depth_stereo, depth_mono):
         mono_stereo = self.mono_stereo_attention(depth_mono, depth_stereo) # (1 112 48 160)
         stereo_mono = self.stereo_mono_attention(depth_stereo, depth_mono) # (1 112 48 160)
-        
+
         depth_feat = torch.cat([mono_stereo.unsqueeze(1), stereo_mono.unsqueeze(1)], dim=1) # (1 2 112 48 160)
         # depth_feat = torch.cat([mono_stereo, stereo_mono], dim=1)
 
+        # *==================================================#
+        # * 输入形状为 (B, 2, D, H, W)，3D卷积的卷积核沿着三个维度DxHxW滑动，理论上能够：
+        # * 沿深度bin聚合邻近信息；将某个深度bin的相应移动到邻近深度；扩大深度方向感受野；修正深度分布；利用立体深度先验约束单目预测
         depth_feat = F.relu(self.stem(depth_feat))
         depth_feat = self.UNet_3D(depth_feat)
         depth_feat = self.channel_attention(depth_feat)
@@ -285,7 +288,7 @@ class DepthAggregation(nn.Module):
         return depth_prob
 
 class DepthAggregation_wo_neighbor(nn.Module):
-    def __init__(self, 
+    def __init__(self,
         embed_dims=32,
         out_channels=1):
         super(DepthAggregation_wo_neighbor, self).__init__()
@@ -296,13 +299,13 @@ class DepthAggregation_wo_neighbor(nn.Module):
         self.UNet_3D = SimpleUnet3D(in_channels=embed_dims)
         self.channel_attention = ChannelAttention3D(embed_dims=embed_dims)
         self.out_conv = nn.Conv3d(embed_dims, out_channels, kernel_size=3, stride=1, padding=1)
-        
+
     def forward(self, depth_stereo, depth_mono):
         mono_stereo = depth_mono
         # self.mono_stereo_attention(depth_mono, depth_stereo)
         stereo_mono = depth_stereo
         # self.stereo_mono_attention(depth_stereo, depth_mono)
-        
+
         depth_feat = torch.cat([mono_stereo.unsqueeze(1), stereo_mono.unsqueeze(1)], dim=1)
         # depth_feat = torch.cat([mono_stereo, stereo_mono], dim=1)
 
